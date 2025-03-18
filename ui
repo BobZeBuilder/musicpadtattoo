@@ -1,0 +1,75 @@
+import controlP5.*;
+import ddf.minim.*;
+import ddf.minim.analysis.*;
+
+ControlP5 cp5;
+Minim minim;
+AudioPlayer player;
+FFT fft;
+
+void setup() {
+  size(1200, 800);
+  minim = new Minim(this);
+  player = minim.loadFile("musicloop1.mp3", 2048);
+  fft = new FFT(player.bufferSize(), player.sampleRate());
+  
+  cp5 = new ControlP5(this);
+
+  // Sliders
+  cp5.addSlider("Slider1")
+     .setPosition(50, 50)
+     .setSize(20, height-height/4)
+     .setRange(0, 100);
+
+  cp5.addSlider("Slider2")
+     .setPosition(100, 50)
+     .setSize(20, height-height/4)
+     .setRange(0, 100);
+
+  // Knobs
+  cp5.addKnob("Volume")
+       .setPosition(40, height-height/8)
+       .setRadius(40)
+       .setValue(50)
+       .setRange(0, 100);
+  for (int i = 0; i < 5; i++) {
+    cp5.addKnob("Knob" + (i + 1))
+       .setPosition(width/6+width/20 + i * width/10, height/2)
+       .setRadius(25)
+       .setValue(50)
+       .setRange(0, 100);
+  }
+
+  // Pads
+  for (int i = 0; i < 6; i++) {
+    int x = i % 3;
+    int y = i / 3;
+    cp5.addButton("Pad" + (i + 1))
+       .setPosition(width/6 + x * width/8, height/2+height/8 + y * width/8)
+       .setSize(width/10, width/10);
+  }
+
+  // Start the audio
+  player.play();
+}
+
+void draw() {
+  background(30);
+
+  // Perform FFT analysis
+  fft.forward(player.mix);
+
+  // Draw waveform display
+  stroke(255);
+  noFill();
+  beginShape();
+  
+  for (int i = 0; i < fft.specSize(); i++) {
+    float x = map(i, 0, fft.specSize(), width/4, width-width/10);
+    float y = map(fft.getBand(i), 0, 50, height/2-height/10, height/3); // Mapping frequency values to screen height
+    
+    vertex(x, y);
+  }
+  
+  endShape();
+}
