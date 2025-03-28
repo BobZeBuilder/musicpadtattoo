@@ -1,5 +1,6 @@
 import ddf.minim.*;
 import controlP5.*;
+import processing.serial.*;
 
 Minim minim;
 AudioPlayer sound;
@@ -11,14 +12,24 @@ Slider slider1, slider2;
 Button playPauseButton;
 Knob volumeDial;
 Button[] padButtons;
-boolean[] padPlaying;  // Array to track the playing state of each pad
+boolean[] padPlaying;  // Track playing state of each pad
 
 float volume = 0.8;
 boolean isPlaying = true;
+boolean isPadMode = true;  // true = PAD MODE, false = SLIDER MODE
+
 color nightBg = color(20, 20, 30);
 color textColor = color(200, 200, 255);
 color buttonColor = color(50, 50, 80);
 color activeColor = color(100, 100, 255);
+
+// Serial communication variables
+Serial arduinoPort;
+int prevPausePlay = 0;
+int prevVolDown = 0;
+int prevVolUp = 0;
+int prevMode = 0;
+int[] prevPad = new int[8];  // For 8 pad inputs from Arduino
 
 void setup() {
   size(600, 400);
@@ -28,18 +39,17 @@ void setup() {
   sound = minim.loadFile("dirtbeat.wav");
   sound.loop();
   
-  // Load pads
+  // Load pad sounds
   pads = new AudioPlayer[padSounds.length];
   padPlaying = new boolean[padSounds.length];
-  
   for (int i = 0; i < padSounds.length; i++) {
     pads[i] = minim.loadFile(padSounds[i]);
-    padPlaying[i] = false;  // Initialize all pads as not playing
+    padPlaying[i] = false;
   }
 
   cp5 = new ControlP5(this);
-
-  // Sliders
+  
+  // Sliders (these are always visible)
   slider1 = cp5.addSlider("slider1")
                .setPosition(20, 50)
                .setSize(150, 20)
@@ -57,7 +67,8 @@ void setup() {
                .setColorBackground(buttonColor)
                .setColorForeground(activeColor)
                .setColorActive(textColor);
-  // Play/Pause Button
+  
+  // Play/Pause Button for main sound
   playPauseButton = cp5.addButton("togglePlay")
                        .setLabel("Pause")
                        .setPosition(50, 260)
@@ -66,7 +77,7 @@ void setup() {
                        .setColorForeground(activeColor)
                        .setColorActive(textColor);
 
-  // Volume Dial
+  // Volume Dial for main sound volume
   volumeDial = cp5.addKnob("volume")
                   .setPosition(50, 160)
                   .setRadius(30)
@@ -76,48 +87,57 @@ void setup() {
                   .setColorForeground(activeColor)
                   .setColorActive(textColor);
   
-  // Sound Pad Buttons
+  // Sound Pad Buttons (6 pads) initially set for PAD MODE
   padButtons = new Button[6];
+  String[] padLabels = {"Kick", "Snare", "Hi-Hat", "Clap", "Dirtbeat", "Perc"};
   for (int i = 0; i < 6; i++) {
     int x = 200 + (i % 3) * 100;
     int y = 300 + (i / 3) * 50;
-    
     padButtons[i] = cp5.addButton("pad" + i)
-                       .setLabel("Pad " + (i + 1))
+                       .setLabel(padLabels[i])
                        .setPosition(x, y)
                        .setSize(80, 40)
                        .setColorBackground(buttonColor)
                        .setColorForeground(activeColor)
                        .setColorActive(textColor);
   }
+  
+  // Initialize Serial communication (choose the appropriate port if needed)
+  println(Serial.list());
+  // Assumes the Arduino is at index 0; adjust if necessary.
+  arduinoPort = new Serial(this, Serial.list()[0], 115200);
+  arduinoPort.bufferUntil('\n');
 }
 
 void draw() {
   background(nightBg);
   
-  // Title
+  // Title and waveform
   fill(textColor);
   textSize(16);
   text("Sound Board", 250, 30);
-
-  // Draw waveform
   drawWaveform();
   
-  // Apply volume to sound
-  sound.setGain(map(volume, 0, 1, -80, 0)); // Convert to dB range
-  pads[0].setGain(map(volume, 0, 1, -80, 0)); // Convert to dB range
-  pads[1].setGain(map(volume, 0, 1, -80, 0)); // Convert to dB range
-  pads[2].setGain(map(volume, 0, 1, -80, 0)); // Convert to dB range
-  pads[3].setGain(map(volume, 0, 1, -80, 0)); // Convert to dB range
-  pads[4].setGain(map(volume, 0, 1, -80, 0)); // Convert to dB range
-  pads[5].setGain(map(volume, 0, 1, -80, 0)); // Convert to dB range
+  // Apply volume (convert to dB range)
+  float gainVal = map(volume, 0, 1, -80, 0);
+  sound.setGain(gainVal);
+  for (int i = 0; i < pads.length; i++) {
+    pads[i].setGain(gainVal);
+  }
+  
+  // Display current mode at bottom left
+  textSize(16);
+  if (isPadMode) {
+    text("PAD MODE", 10, height - 10);
+  } else {
+    text("SLIDER MODE", 10, height - 10);
+  }
 }
 
 void drawWaveform() {
   stroke(activeColor);
   noFill();
   beginShape();
-  
   if (sound.isPlaying()) {
     for (int i = 0; i < width / 2; i++) {
       int bufferIndex = int(map(i, 0, width / 2, 0, sound.bufferSize()));
@@ -125,39 +145,55 @@ void drawWaveform() {
       vertex(width / 2 + i, height / 3 + wave);
     }
   }
-  
   endShape();
 }
 
-// Button Event Handlers
-void pad0() { togglePad(0); }
-void pad1() { togglePad(1); }
-void pad2() { togglePad(2); }
-void pad3() { togglePad(3); }
-void pad4() { togglePad(4); }
-void pad5() { togglePad(5); }
+// GUI Button Event Handlers (when buttons on screen are clicked)
+void pad0() { handlePadAction(0); }
+void pad1() { handlePadAction(1); }
+void pad2() { handlePadAction(2); }
+void pad3() { handlePadAction(3); }
+void pad4() { handlePadAction(4); }
+void pad5() { handlePadAction(5); }
 
-// Toggle pads on/off
+void handlePadAction(int index) {
+  // In PAD MODE, toggle the pad sound
+  if (isPadMode) {
+    togglePad(index);
+  } else {
+    // In SLIDER MODE, simulate a pad press by adjusting sliders:
+    if (index == 0) { // Increase slider1
+      slider1.setValue(min(slider1.getValue() + 5, slider1.getMax()));
+    } else if (index == 1) { // Decrease slider1
+      slider1.setValue(max(slider1.getValue() - 5, slider1.getMin()));
+    } else if (index == 2) { // Increase slider2
+      slider2.setValue(min(slider2.getValue() + 5, slider2.getMax()));
+    } else if (index == 3) { // Decrease slider2
+      slider2.setValue(max(slider2.getValue() - 5, slider2.getMin()));
+    }
+    // Pads 4 and 5 are not assigned in SLIDER MODE
+  }
+}
+
 void togglePad(int index) {
   if (padPlaying[index]) {
-    pads[index].pause();  // Stop the sound
+    pads[index].pause();
   } else {
     pads[index].rewind();
     pads[index].play();
   }
-  padPlaying[index] = !padPlaying[index];  // Toggle state
+  padPlaying[index] = !padPlaying[index];
 }
 
-// Adjust volume
 void volume(float v) {
   volume = v;
 }
 
-// Toggle Play/Pause for Main Sound
+// Toggle main sound play/pause
 void togglePlay() {
   if (isPlaying) {
     sound.pause();
-    stopAllPads();  // Stop all pad sounds when pausing
+    stopAllPads();
     playPauseButton.setLabel("Play");
   } else {
     sound.loop();
@@ -166,10 +202,81 @@ void togglePlay() {
   isPlaying = !isPlaying;
 }
 
-// Stop all pads when pausing the main track
 void stopAllPads() {
   for (int i = 0; i < pads.length; i++) {
     pads[i].pause();
     padPlaying[i] = false;
+  }
+}
+
+// Process incoming serial data from Arduino
+void serialEvent(Serial p) {
+  String data = trim(p.readStringUntil('\n'));
+  // Expect a CSV line: pausePlay,volDown,volUp,mode, pad0,...,pad7
+  if (data.indexOf(",") != -1) {
+    String[] tokens = split(data, ",");
+    if (tokens.length >= 12) {
+      int arPause = int(tokens[0]);
+      int arVolDown = int(tokens[1]);
+      int arVolUp = int(tokens[2]);
+      int arMode = int(tokens[3]);
+      
+      int[] arPads = new int[8];
+      for (int i = 0; i < 8; i++) {
+        arPads[i] = int(tokens[4 + i]);
+      }
+      
+      // Process Pause/Play (E0)
+      if (arPause == 1 && prevPausePlay == 0) {
+        togglePlay();
+      }
+      prevPausePlay = arPause;
+      
+      // Process Volume Up (E2)
+      if (arVolUp == 1 && prevVolUp == 0) {
+        volume = min(volume + 0.1, 1);
+        volumeDial.setValue(volume);
+      }
+      prevVolUp = arVolUp;
+      
+      // Process Volume Down (E1)
+      if (arVolDown == 1 && prevVolDown == 0) {
+        volume = max(volume - 0.1, 0);
+        volumeDial.setValue(volume);
+      }
+      prevVolDown = arVolDown;
+      
+      // Process Mode toggle (E3) to switch between PAD and SLIDER modes
+      if (arMode == 1 && prevMode == 0) {
+        isPadMode = !isPadMode;
+        // Update pad button labels based on current mode:
+        if (isPadMode) {
+          padButtons[0].setLabel("Kick");
+          padButtons[1].setLabel("Snare");
+          padButtons[2].setLabel("Hi-Hat");
+          padButtons[3].setLabel("Clap");
+          padButtons[4].setLabel("Dirtbeat");
+          padButtons[5].setLabel("Perc");
+        } else {
+          padButtons[0].setLabel("S1+");
+          padButtons[1].setLabel("S1-");
+          padButtons[2].setLabel("S2+");
+          padButtons[3].setLabel("S2-");
+          padButtons[4].setLabel("NA");
+          padButtons[5].setLabel("NA");
+        }
+      }
+      prevMode = arMode;
+      
+      // Process Pad buttons (using electrodes E4–E9 for our six pad buttons)
+      for (int i = 0; i < 6; i++) {
+        if (arPads[i] == 1 && prevPad[i] == 0) {
+          // If in PAD mode, toggle the pad sound; if in SLIDER mode, adjust slider values.
+          handlePadAction(i);
+        }
+        prevPad[i] = arPads[i];
+      }
+      // Note: Arduino pads 6 and 7 (E10 & E11) are not used.
+    }
   }
 }
