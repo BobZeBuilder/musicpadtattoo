@@ -18,7 +18,7 @@ float volume = 0.8;
 boolean isPlaying = true;
 boolean isPadMode = true;  // true = PAD MODE, false = SLIDER MODE
 
-// --- Global variables for second order tone control filters ---
+// Global variables for second order tone control filters
 BassShelfFilter2 bassShelf;
 TrebleShelfFilter2 trebleShelf;
 
@@ -42,14 +42,11 @@ void setup() {
   // Load main sound
   sound = minim.loadFile("dirtbeat.wav");
   
-  // --- Initialize second order tone controls ---
-  // Bass shelf: affects frequencies below 250 Hz.
-  // Treble shelf: affects frequencies above 3000 Hz (adjust cutoff as needed).
-  // Starting at 0 dB gain.
+  // Initialize second order tone controls
   bassShelf = new BassShelfFilter2(250, 0, sound.sampleRate());
   trebleShelf = new TrebleShelfFilter2(3000, 0, sound.sampleRate());
   
-  // Add filters to the main sound (order matters)
+  // Add filters to the main sound 
   sound.addEffect(bassShelf);
   sound.addEffect(trebleShelf);
   
@@ -120,7 +117,6 @@ void setup() {
   
   // Initialize Serial communication (choose the appropriate port if needed)
   println(Serial.list());
-  // Assumes the Arduino is at index 0; adjust if necessary.
   arduinoPort = new Serial(this, Serial.list()[0], 115200);
   arduinoPort.bufferUntil('\n');
 }
