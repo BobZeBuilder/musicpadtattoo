@@ -14,6 +14,10 @@ Knob volumeDial;
 Button[] padButtons;
 boolean[] padPlaying;  // Track playing state of each pad
 
+// Equalizer effects implemented as custom filters:
+MyLowPass bassFilter;    // Custom low-pass filter for bass
+MyHighPass trebleFilter; // Custom high-pass filter for treble
+
 float volume = 0.8;
 boolean isPlaying = true;
 boolean isPadMode = true;  // true = PAD MODE, false = SLIDER MODE
@@ -39,6 +43,18 @@ void setup() {
   sound = minim.loadFile("dirtbeat.wav");
   sound.loop();
   
+  // Initialize equalizer effects:
+  // For bass: when slider1 is at 0, cutoff = 5000 Hz (minimal bass boost);
+  // at 100, cutoff = 500 Hz (greater bass boost).
+  bassFilter = new MyLowPass(5000, sound.sampleRate());
+  // For treble: when slider2 is at 0, cutoff = 100 Hz;
+  // at 100, cutoff = 2000 Hz.
+  trebleFilter = new MyHighPass(100, sound.sampleRate());
+  
+  // Add effects to the audio chain
+  sound.addEffect(bassFilter);
+  sound.addEffect(trebleFilter);
+  
   // Load pad sounds
   pads = new AudioPlayer[padSounds.length];
   padPlaying = new boolean[padSounds.length];
@@ -49,7 +65,7 @@ void setup() {
 
   cp5 = new ControlP5(this);
   
-  // Sliders (these are always visible)
+  // Sliders for equalizer control (always visible)
   slider1 = cp5.addSlider("slider1")
                .setPosition(20, 50)
                .setSize(150, 20)
@@ -58,7 +74,7 @@ void setup() {
                .setColorBackground(buttonColor)
                .setColorForeground(activeColor)
                .setColorActive(textColor);
-
+               
   slider2 = cp5.addSlider("slider2")
                .setPosition(20, 100)
                .setSize(150, 20)
@@ -102,9 +118,8 @@ void setup() {
                        .setColorActive(textColor);
   }
   
-  // Initialize Serial communication (choose the appropriate port if needed)
+  // Initialize Serial communication (adjust port if necessary)
   println(Serial.list());
-  // Assumes the Arduino is at index 0; adjust if necessary.
   arduinoPort = new Serial(this, Serial.list()[0], 115200);
   arduinoPort.bufferUntil('\n');
 }
@@ -112,7 +127,7 @@ void setup() {
 void draw() {
   background(nightBg);
   
-  // Title and waveform
+  // Title and waveform display
   fill(textColor);
   textSize(16);
   text("Sound Board", 250, 30);
@@ -124,6 +139,21 @@ void draw() {
   for (int i = 0; i < pads.length; i++) {
     pads[i].setGain(gainVal);
   }
+  
+  // Update equalizer effects based on slider values:
+  // Bass: Map slider1 from 5000 Hz down to 500 Hz.
+  float bassCutoff = map(slider1.getValue(), slider1.getMin(), slider1.getMax(), 5000, 500);
+  bassFilter.setCutoff(bassCutoff);
+  
+  // Treble: Map slider2 from 100 Hz up to 2000 Hz.
+  float trebleCutoff = map(slider2.getValue(), slider2.getMin(), slider2.getMax(), 100, 2000);
+  trebleFilter.setCutoff(trebleCutoff);
+  
+  // Draw slider labels
+  textSize(12);
+  fill(textColor);
+  text("Bass Control", 20, 45);
+  text("Treble Control", 20, 95);
   
   // Display current mode at bottom left
   textSize(16);
@@ -148,7 +178,7 @@ void drawWaveform() {
   endShape();
 }
 
-// GUI Button Event Handlers (when buttons on screen are clicked)
+// GUI Button Event Handlers (for on-screen pad buttons)
 void pad0() { handlePadAction(0); }
 void pad1() { handlePadAction(1); }
 void pad2() { handlePadAction(2); }
@@ -157,21 +187,20 @@ void pad4() { handlePadAction(4); }
 void pad5() { handlePadAction(5); }
 
 void handlePadAction(int index) {
-  // In PAD MODE, toggle the pad sound
+  // In PAD MODE, toggle the pad sound.
   if (isPadMode) {
     togglePad(index);
   } else {
-    // In SLIDER MODE, simulate a pad press by adjusting sliders:
-    if (index == 0) { // Increase slider1
+    // In SLIDER MODE, simulate pad presses to adjust sliders.
+    if (index == 0) { // Increase slider1 (Bass Control)
       slider1.setValue(min(slider1.getValue() + 5, slider1.getMax()));
-    } else if (index == 1) { // Decrease slider1
+    } else if (index == 1) { // Decrease slider1 (Bass Control)
       slider1.setValue(max(slider1.getValue() - 5, slider1.getMin()));
-    } else if (index == 2) { // Increase slider2
+    } else if (index == 2) { // Increase slider2 (Treble Control)
       slider2.setValue(min(slider2.getValue() + 5, slider2.getMax()));
-    } else if (index == 3) { // Decrease slider2
+    } else if (index == 3) { // Decrease slider2 (Treble Control)
       slider2.setValue(max(slider2.getValue() - 5, slider2.getMin()));
     }
-    // Pads 4 and 5 are not assigned in SLIDER MODE
   }
 }
 
@@ -212,7 +241,7 @@ void stopAllPads() {
 // Process incoming serial data from Arduino
 void serialEvent(Serial p) {
   String data = trim(p.readStringUntil('\n'));
-  // Expect a CSV line: pausePlay,volDown,volUp,mode, pad0,...,pad7
+  // Expected CSV: pausePlay,volDown,volUp,mode, pad0,...,pad7
   if (data.indexOf(",") != -1) {
     String[] tokens = split(data, ",");
     if (tokens.length >= 12) {
@@ -246,10 +275,10 @@ void serialEvent(Serial p) {
       }
       prevVolDown = arVolDown;
       
-      // Process Mode toggle (E3) to switch between PAD and SLIDER modes
+      // Process Mode toggle (E3) to switch between PAD and SLIDER modes.
       if (arMode == 1 && prevMode == 0) {
         isPadMode = !isPadMode;
-        // Update pad button labels based on current mode:
+        // Update pad button labels based on current mode.
         if (isPadMode) {
           padButtons[0].setLabel("Kick");
           padButtons[1].setLabel("Snare");
@@ -268,15 +297,110 @@ void serialEvent(Serial p) {
       }
       prevMode = arMode;
       
-      // Process Pad buttons (using electrodes E4–E9 for our six pad buttons)
+      // Process pad buttons (using Arduino electrodes E4–E9 for our 6 pads)
       for (int i = 0; i < 6; i++) {
         if (arPads[i] == 1 && prevPad[i] == 0) {
-          // If in PAD mode, toggle the pad sound; if in SLIDER mode, adjust slider values.
           handlePadAction(i);
         }
         prevPad[i] = arPads[i];
       }
-      // Note: Arduino pads 6 and 7 (E10 & E11) are not used.
+    }
+  }
+}
+
+// --- Custom Low-Pass Filter Class ---
+class MyLowPass implements AudioEffect {
+  float cutoff;
+  float RC;
+  float dt;
+  float alpha;
+  float prevOutputL, prevOutputR;
+  float sampleRate;
+  
+  MyLowPass(float cutoff, float sampleRate) {
+    this.sampleRate = sampleRate;
+    setCutoff(cutoff);
+    prevOutputL = 0;
+    prevOutputR = 0;
+  }
+  
+  public void setCutoff(float cutoff) {
+    this.cutoff = cutoff;
+    RC = 1.0 / (TWO_PI * cutoff);
+    dt = 1.0 / sampleRate;
+    alpha = dt / (RC + dt);
+  }
+  
+  public void process(float[] samp) {
+    for (int i = 0; i < samp.length; i++) {
+      float input = samp[i];
+      float output = prevOutputL + alpha * (input - prevOutputL);
+      samp[i] = output;
+      prevOutputL = output;
+    }
+  }
+  
+  public void process(float[] left, float[] right) {
+    for (int i = 0; i < left.length; i++) {
+      float inputL = left[i];
+      float outputL = prevOutputL + alpha * (inputL - prevOutputL);
+      left[i] = outputL;
+      prevOutputL = outputL;
+      
+      float inputR = right[i];
+      float outputR = prevOutputR + alpha * (inputR - prevOutputR);
+      right[i] = outputR;
+      prevOutputR = outputR;
+    }
+  }
+}
+
+// --- Custom High-Pass Filter Class ---
+class MyHighPass implements AudioEffect {
+  float cutoff;
+  float RC;
+  float dt;
+  float alpha;
+  float prevInputL, prevOutputL, prevInputR, prevOutputR;
+  float sampleRate;
+  
+  MyHighPass(float cutoff, float sampleRate) {
+    this.sampleRate = sampleRate;
+    setCutoff(cutoff);
+    prevInputL = prevOutputL = 0;
+    prevInputR = prevOutputR = 0;
+  }
+  
+  public void setCutoff(float cutoff) {
+    this.cutoff = cutoff;
+    RC = 1.0 / (TWO_PI * cutoff);
+    dt = 1.0 / sampleRate;
+    alpha = RC / (RC + dt);
+  }
+  
+  public void process(float[] samp) {
+    for (int i = 0; i < samp.length; i++) {
+      float input = samp[i];
+      float output = alpha * (prevOutputL + input - prevInputL);
+      samp[i] = output;
+      prevInputL = input;
+      prevOutputL = output;
+    }
+  }
+  
+  public void process(float[] left, float[] right) {
+    for (int i = 0; i < left.length; i++) {
+      float inputL = left[i];
+      float outputL = alpha * (prevOutputL + inputL - prevInputL);
+      left[i] = outputL;
+      prevInputL = inputL;
+      prevOutputL = outputL;
+      
+      float inputR = right[i];
+      float outputR = alpha * (prevOutputR + inputR - prevInputR);
+      right[i] = outputR;
+      prevInputR = inputR;
+      prevOutputR = outputR;
     }
   }
 }
